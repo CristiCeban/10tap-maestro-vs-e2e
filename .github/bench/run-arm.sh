@@ -69,9 +69,11 @@ case "$ARM" in
     versions="maestro=$(maestro --version 2>/dev/null | tail -n 1)"
     ;;
   e2e)
+    # e2e only writes its output inside the project root (example/).
     (cd example && "${TIME[@]}" yarn test:e2e --target "$PLATFORM" --retries 0 \
-      --reporter list,junit --output "$OUT/e2e") > "$OUT/stdout.log" 2>&1
+      --reporter list,junit --output .bench-e2e) > "$OUT/stdout.log" 2>&1
     code=$?
+    cp -R example/.bench-e2e "$OUT/e2e" 2>/dev/null || true
     ver() { (cd example && node -p "require('$1/package.json').version" 2>/dev/null); }
     versions="e2e=$(ver e2e);@e2e-dev/mobile=$(ver @e2e-dev/mobile);agent-device=$(ver agent-device)"
     ;;

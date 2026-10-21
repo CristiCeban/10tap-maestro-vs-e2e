@@ -74,7 +74,12 @@ case "$ARM" in
       --reporter list,junit --output .bench-e2e) > "$OUT/stdout.log" 2>&1
     code=$?
     cp -R example/.bench-e2e "$OUT/e2e" 2>/dev/null || true
-    ver() { (cd example && node -p "require('$1/package.json').version" 2>/dev/null); }
+    # Read the installed package.json files (their exports hide the subpath).
+    ver() {
+      for d in example/node_modules node_modules; do
+        [ -f "$d/$1/package.json" ] && { node -p "require('./$d/$1/package.json').version"; return; }
+      done
+    }
     versions="e2e=$(ver e2e);@e2e-dev/mobile=$(ver @e2e-dev/mobile);agent-device=$(ver agent-device)"
     ;;
   *)

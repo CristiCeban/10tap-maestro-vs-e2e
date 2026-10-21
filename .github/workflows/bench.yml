@@ -1,16 +1,20 @@
-name: Bench Android (Maestro vs e2e)
+name: Bench (Maestro vs e2e)
 
 # Runs the example/ suite with Maestro (example/.maestro) and with e2e
-# (example/tests) on GitHub-hosted ubuntu-latest runners. Each run is its own
-# job on a fresh runner, with the same emulator and the same prebuilt APK
-# (run "Build APK" first). The summarize job writes the per-arm table to the
-# run summary and uploads bench.csv.
+# (example/tests) on GitHub-hosted runners: Android on ubuntu-latest (API 34
+# emulator), iOS on macos-15 (an iPhone simulator). Each run is its own job on
+# a fresh runner, with the same prebuilt app (run "Build apps" first). The
+# summarize job writes the per-platform, per-arm table to the run summary and
+# uploads bench.csv.
 on:
   workflow_dispatch:
     inputs:
       runs:
-        description: Runs per arm (one fresh runner each)
+        description: Runs per arm and platform (one fresh runner each)
         default: '5'
+      platforms:
+        description: Comma-separated platforms
+        default: 'android,ios'
       arms:
         description: Comma-separated arms
         default: 'maestro,e2e'
@@ -30,25 +34,31 @@ jobs:
       - id: matrix
         env:
           RUNS: ${{ inputs.runs }}
+          PLATFORMS: ${{ inputs.platforms }}
           ARMS: ${{ inputs.arms }}
         run: |
           python3 - >> "$GITHUB_OUTPUT" <<'EOF'
           import json, os
-          arms = [a.strip() for a in os.environ['ARMS'].split(',') if a.strip()]
+          split = lambda v: [x.strip() for x in os.environ[v].split(',') if x.strip()]
           runs = int(os.environ['RUNS'])
           # Interleave the arms so both see the same runner conditions.
-          include = [{'arm': a, 'run': r} for r in range(1, runs + 1) for a in arms]
+          include = [{'platform': p, 'arm': a, 'run': r}
+                     for r in range(1, runs + 1) for p in split('PLATFORMS') for a in split('ARMS')]
           print('matrix=' + json.dumps({'include': include}))
           EOF
 
   bench:
     needs: plan
-    name: bench ${{ matrix.arm }} ${{ matrix.run }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    name: bench ${{ matrix.platform }} ${{ matrix.arm }} ${{ matrix.run }}
+    runs-on: ${{ matrix.platform == 'ios' && 'macos-15' || 'ubuntu-latest' }}
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      PLATFORM: ${{ matrix.platform }}
+      ARM: ${{ matrix.arm }}
+      RUN: ${{ matrix.run }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -58,12 +68,17 @@ jobs:
         if: matrix.arm == 'e2e'
         uses: ./.github/actions/setup
 
-      - name: Download the prebuilt APK
+      - name: Download the prebuilt app
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download bench-apk --dir apk --pattern 'app-release.apk*'
-          (cd apk && sha256sum -c app-release.apk.sha256)
+          if [ "$PLATFORM" = ios ]; then
+            gh release download bench-apk --dir app --pattern 'TenTapExample.app.zip*'
+            (cd app && shasum -a 256 -c TenTapExample.app.zip.sha256 && ditto -x -k TenTapExample.app.zip .)
+          else
+            gh release download bench-apk --dir app --pattern 'app-release.apk*'
+            (cd app && sha256sum -c app-release.apk.sha256)
+          fi
 
       - name: Install Maestro
         if: matrix.arm == 'maestro'
@@ -73,7 +88,28 @@ jobs:
           curl -fsSL "https://get.maestro.mobile.dev" | bash
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
 
+      # iOS: the same Xcode selection as the build, then the first iPhone on
+      # the newest runtime (10tap's nightly script), booted with the app.
+      - name: Select Xcode
+        if: matrix.platform == 'ios'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Boot a simulator and install the app
+        if: matrix.platform == 'ios'
+        run: |
+          mkdir -p out
+          t=$(date +%s)
+          .github/scripts/boot-ios-simulator.sh app/TenTapExample.app
+          echo "boot_install_s=$(( $(date +%s) - t ))" >> out/steps.txt
+
+      - name: Run the suite on iOS
+        if: matrix.platform == 'ios'
+        run: .github/bench/run-arm.sh
+
       - name: Enable KVM
+        if: matrix.platform == 'android'
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
@@ -81,11 +117,9 @@ jobs:
 
       # Same emulator as 10tap's e2e-android job; the device prep and the
       # timed suite are in run-arm.sh.
-      - name: Run the suite on API 34
+      - name: Run the suite on Android API 34
+        if: matrix.platform == 'android'
         uses: reactivecircus/android-emulator-runner@v2
-        env:
-          ARM: ${{ matrix.arm }}
-          RUN: ${{ matrix.run }}
         with:
           api-level: 34
           arch: x86_64
@@ -102,13 +136,13 @@ jobs:
       # characters (':') that upload-artifact rejects, so upload an archive.
       - name: Archive the results
         if: always()
-        run: tar -czf bench-out.tgz --ignore-failed-read out || true
+        run: tar -czf bench-out.tgz out || true
 
       - name: Upload the results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bench-${{ matrix.arm }}-${{ matrix.run }}
+          name: bench-${{ matrix.platform }}-${{ matrix.arm }}-${{ matrix.run }}
           path: bench-out.tgz
           if-no-files-found: ignore
           retention-days: 30

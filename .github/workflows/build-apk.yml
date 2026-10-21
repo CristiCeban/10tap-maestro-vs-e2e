@@ -1,16 +1,25 @@
-name: Build APK
+name: Build apps
 
-# Builds the example's release APK once (x86_64, new architecture, as 10tap's
-# e2e-android CI job) and publishes it as the `bench-apk` release asset, so
-# the benchmark jobs download the same binary and never build.
+# Builds the example's release apps once and publishes them as assets of the
+# `bench-apk` release, so the benchmark jobs download the same binaries and
+# never build:
+# - Android: app-release.apk (x86_64, new architecture, as 10tap's
+#   e2e-android CI job)
+# - iOS: TenTapExample.app.zip, a Release simulator build (new architecture,
+#   as 10tap's nightly iOS job)
 on:
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: Comma-separated platforms to build
+        default: 'android,ios'
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  android:
+    if: contains(inputs.platforms, 'android')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -35,17 +44,49 @@ jobs:
           -PreactNativeArchitectures=x86_64
           -PnewArchEnabled=true
 
-      - name: Publish the APK as the bench-apk release
+      - name: Publish the APK
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dist
           cp example/android/app/build/outputs/apk/release/app-release.apk dist/
           (cd dist && sha256sum app-release.apk > app-release.apk.sha256 && cat app-release.apk.sha256)
-          notes="Built from ${GITHUB_SHA} by run ${GITHUB_RUN_ID}"
-          if gh release view bench-apk >/dev/null 2>&1; then
-            gh release upload bench-apk dist/* --clobber
-            gh release edit bench-apk --notes "$notes"
-          else
-            gh release create bench-apk dist/* --title "Benchmark APK" --notes "$notes" --prerelease
-          fi
+          .github/bench/publish.sh dist/*
+
+  ios:
+    if: contains(inputs.platforms, 'ios')
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Build the editor and web utils
+        run: yarn editor:build && yarn editor:build-web-utils
+
+      - name: Build the advanced example's editor
+        run: yarn example editor:build
+
+      - name: Install pods
+        run: yarn example pods
+
+      - name: Build a release simulator app with the JS bundle
+        run: yarn example build:ios:release
+
+      - name: Publish the app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          ditto -c -k --keepParent example/ios/build/Build/Products/Release-iphonesimulator/TenTapExample.app dist/TenTapExample.app.zip
+          (cd dist && shasum -a 256 TenTapExample.app.zip > TenTapExample.app.zip.sha256 && cat TenTapExample.app.zip.sha256)
+          xcodebuild -version | tr '\n' ' ' > dist/TenTapExample.app.xcode.txt
+          .github/bench/publish.sh dist/*

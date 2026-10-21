@@ -1,0 +1,145 @@
+name: Bench Android (Maestro vs e2e)
+
+# Runs the example/ suite with Maestro (example/.maestro) and with e2e
+# (example/tests) on GitHub-hosted ubuntu-latest runners. Each run is its own
+# job on a fresh runner, with the same emulator and the same prebuilt APK
+# (run "Build APK" first). The summarize job writes the per-arm table to the
+# run summary and uploads bench.csv.
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Runs per arm (one fresh runner each)
+        default: '5'
+      arms:
+        description: Comma-separated arms
+        default: 'maestro,e2e'
+      maestro_version:
+        description: Maestro CLI version
+        default: '2.11.0'
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        env:
+          RUNS: ${{ inputs.runs }}
+          ARMS: ${{ inputs.arms }}
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'EOF'
+          import json, os
+          arms = [a.strip() for a in os.environ['ARMS'].split(',') if a.strip()]
+          runs = int(os.environ['RUNS'])
+          # Interleave the arms so both see the same runner conditions.
+          include = [{'arm': a, 'run': r} for r in range(1, runs + 1) for a in arms]
+          print('matrix=' + json.dumps({'include': include}))
+          EOF
+
+  bench:
+    needs: plan
+    name: bench ${{ matrix.arm }} ${{ matrix.run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # Only e2e needs the workspace dependencies; Maestro runs the YAML.
+      - name: Setup
+        if: matrix.arm == 'e2e'
+        uses: ./.github/actions/setup
+
+      - name: Download the prebuilt APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download bench-apk --dir apk --pattern 'app-release.apk*'
+          (cd apk && sha256sum -c app-release.apk.sha256)
+
+      - name: Install Maestro
+        if: matrix.arm == 'maestro'
+        env:
+          MAESTRO_VERSION: ${{ inputs.maestro_version }}
+        run: |
+          curl -fsSL "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Same emulator as 10tap's e2e-android job; the device prep and the
+      # timed suite are in run-arm.sh.
+      - name: Run the suite on API 34
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          ARM: ${{ matrix.arm }}
+          RUN: ${{ matrix.run }}
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_5
+          cores: 4
+          ram-size: 4096M
+          heap-size: 576M
+          disable-animations: true
+          disable-spellchecker: true
+          script: .github/bench/run-arm.sh
+
+      # Maestro names its output folders after the flows, which contain
+      # characters (':') that upload-artifact rejects, so upload an archive.
+      - name: Archive the results
+        if: always()
+        run: tar -czf bench-out.tgz --ignore-failed-read out || true
+
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.arm }}-${{ matrix.run }}
+          path: bench-out.tgz
+          if-no-files-found: ignore
+          retention-days: 30
+
+  summarize:
+    needs: bench
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download the results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bench-*
+          path: results
+
+      - name: Summarize
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for f in results/*/bench-out.tgz; do
+            d=$(dirname "$f"); tar -xzf "$f" -C "$d"
+          done
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs" --paginate > jobs.json
+          python3 .github/bench/summarize.py results jobs.json bench.csv >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-summary
+          path: bench.csv
+          retention-days: 90

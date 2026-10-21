@@ -1,0 +1,51 @@
+name: Build APK
+
+# Builds the example's release APK once (x86_64, new architecture, as 10tap's
+# e2e-android CI job) and publishes it as the `bench-apk` release asset, so
+# the benchmark jobs download the same binary and never build.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Setup Android toolchain
+        uses: ./.github/actions/setup-android
+
+      - name: Build the editor and web utils
+        run: yarn editor:build && yarn editor:build-web-utils
+
+      - name: Build the advanced example's editor
+        run: yarn example editor:build
+
+      - name: Build a release APK with the JS bundle
+        run: >
+          yarn example build:android:release
+          -PreactNativeArchitectures=x86_64
+          -PnewArchEnabled=true
+
+      - name: Publish the APK as the bench-apk release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          cp example/android/app/build/outputs/apk/release/app-release.apk dist/
+          (cd dist && sha256sum app-release.apk > app-release.apk.sha256 && cat app-release.apk.sha256)
+          notes="Built from ${GITHUB_SHA} by run ${GITHUB_RUN_ID}"
+          if gh release view bench-apk >/dev/null 2>&1; then
+            gh release upload bench-apk dist/* --clobber
+            gh release edit bench-apk --notes "$notes"
+          else
+            gh release create bench-apk dist/* --title "Benchmark APK" --notes "$notes" --prerelease
+          fi

@@ -16,7 +16,15 @@ test('Editor tap closes the custom keyboard', async ({ app, screen }) => {
   await expect(screen.getByTestId('sticker-0')).toBeVisible();
   // The editor view reaches under the custom keyboard, so its center can land
   // on the keyboard switcher; tap the text instead.
-  await screen.getByText('Pick a sticker or a color.').tap();
+  //
+  // `.first()`: the WebView projects this paragraph as two sibling text nodes
+  // with the same value, so a bare `getByText` matched 2 and died with
+  // LOCATOR_AMBIGUOUS before the tap (iOS 26 CI, run 39808553422). Duplicates
+  // under one textbox are that projection, not two paragraphs on screen. Maestro
+  // takes the first match unless a flow asks otherwise — hence
+  // `tapOn: { text: 'Bold', index: 1 }` in the toolbar flow — so this matches
+  // the source instead of being stricter than it.
+  await screen.getByText('Pick a sticker or a color.').first().tap();
   await expect(screen.getByTestId('sticker-0')).toBeHidden();
   await typeInEditor(screen, EDITOR, 'x');
   await expectHtml(screen, /x/);

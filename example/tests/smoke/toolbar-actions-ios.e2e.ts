@@ -8,6 +8,7 @@ import { test } from '@e2e-dev/mobile';
 import { expect } from 'e2e';
 import {
   HOME_TITLE,
+  doubleTapToSelect,
   editorStatus,
   expectHtml,
   insertLink,
@@ -36,10 +37,14 @@ test(
       timeout: 15_000,
     });
 
-    // Link on the selected word "Smoke"; the https:// protocol is added (#255)
-    await screen.getByTestId(EDITOR).getByText('Smoke test').doubleTap();
-    const select = screen.getByText('Select', { visible: true });
-    if (await select.isVisible()) await select.tap();
+    // Link on the selected word "Smoke"; the https:// protocol is added (#255).
+    // The toolbar's `Link` is disabled until the WebView reports a selection, so
+    // the double-tap has to land before it can be tapped (doubleTapToSelect).
+    await doubleTapToSelect(
+      screen,
+      screen.getByTestId(EDITOR).getByText('Smoke test'),
+      await toolbarButton(screen, 'Link')
+    );
     await insertLink(screen, 'example.com');
     await expectHtml(
       screen,

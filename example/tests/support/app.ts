@@ -91,6 +91,39 @@ export async function typeInEditor(
 }
 
 /**
+ * Double-tap a word to select it, as the link and formatting steps do.
+ *
+ * The Maestro source's `doubleTapOn` is followed by `waitForAnimationToEnd` and
+ * an optional `tapOn: Select`, which between them give iOS's text-selection
+ * gesture time to land. The port had only the optional `Select` tap, and that
+ * reads the screen once: on iOS 26 in CI the double-tap had not committed a
+ * selection when the next step ran, so the toolbar's `Link` was still
+ * `[disabled]` (see `insertLink`) and the flow died 30 s later on the link bar
+ * that never opened. A double-tap that the WebView did not register is not an
+ * error the tool reports — the gesture is delivered, nothing happens — so this
+ * checks the state the gesture exists to produce (`enabled` on the toolbar
+ * button that needs a selection) and retries the gesture while that is missing.
+ * Still no assertion is relaxed: the flow asserts exactly what it asserted.
+ */
+export async function doubleTapToSelect(
+  screen: Screen,
+  word: Locator,
+  needsSelection: Locator,
+  attempts = 3
+) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    await word.doubleTap();
+    const select = screen.getByText('Select', { visible: true });
+    if (await select.isVisible()) await select.tap();
+    if (await needsSelection.isEnabled()) return;
+  }
+  throw new Error(
+    `the double-tap never produced a selection: ${attempts} attempts left the ` +
+      'control that needs one disabled (the toolbar gate reads the WebView state)'
+  );
+}
+
+/**
  * The opening every keyboard flow shares: open a keyboard example screen and
  * tap its editor (`keyboard-example-editor`). On a cold start the keyboard can
  * begin rising after that tap returns, and the switcher rides up with it; the
@@ -133,14 +166,44 @@ export async function waitForKeyboardRide(
   }
 }
 
+/**
+ * The `waitForAnimationToEnd` the Maestro sources put before a tap that follows
+ * typing, expressed as state. Best-effort by design: `waitForAnimationToEnd`
+ * returns when the animations end and also returns when they never end, so the
+ * port must never turn a missing animation into a test failure — it waits for
+ * the app's `keyboard:up` to hold briefly, and carries on if this screen's
+ * keyboard state never settles.
+ */
+export async function settleAfterKeyboardRise(screen: Screen, budgetMs = 3_000) {
+  try {
+    await expectKeyboardBackUp(screen, 300, budgetMs);
+  } catch {
+    // Same outcome as the source's wait timing out: continue.
+  }
+}
+
 export const EDITOR = 'keyboard-example-editor';
 
 /**
  * The toolbar's link bar: `tapOn: Link`, `inputText: <url>` (the bar's input
  * autofocuses), `tapOn: Insert`.
+ *
+ * `Link` is `disabled: ({ editorState }) => !editorState.isLinkActive &&
+ * !editorState.selection?` — in practice it needs a non-empty selection, so the
+ * word the caller double-tapped has to have *landed* in the WebView first. The
+ * source gets that for free: `doubleTapOn` is followed by `waitForAnimationToEnd`
+ * and the optional `Select` tap. Tapping `Link` while it is still disabled is a
+ * no-op (it is on screen, so the locator resolves and the tap "succeeds"), and
+ * the link bar then never opens: on iOS 26 in CI that is exactly how this flow
+ * died — the screen at failure shows `button "Link" [disabled]` and the next
+ * step timing out 30 s on `getByPlaceholder("Type your URL here...")`. Wait for
+ * the button's own enabled state, which is the precondition, instead of for an
+ * animation or a fixed delay.
  */
 export async function insertLink(screen: Screen, url: string) {
-  await (await toolbarButton(screen, 'Link')).tap();
+  const link = await toolbarButton(screen, 'Link');
+  await expect(link).toBeEnabled({ timeout: 10_000 });
+  await link.tap();
   await screen.getByPlaceholder('Type your URL here...').pressSequentially(url);
   await screen.getByText('Insert').tap();
 }

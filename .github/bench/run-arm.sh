@@ -58,6 +58,11 @@ for devs in json.load(sys.stdin)["devices"].values():
     for d in devs:
         print(d["udid"]); sys.exit()')
   export E2E_IOS_DEVICE="$udid"
+  # Deterministic keyboard for BOTH arms, the iOS counterpart of the emulator's
+  # disable-spellchecker/disable-animations flags below. Runs before the warm
+  # launch so the app picks the preferences up on its first launch of the run.
+  STEP_LOG="$OUT/steps.txt" .github/scripts/ios-keyboard-prefs.sh "$udid" \
+    >> "$OUT/steps.txt" 2>&1 || echo "ios_keyboard_prefs=FAILED" >> "$OUT/steps.txt"
   t=$(now)
   xcrun simctl launch "$udid" "$APP"
   sleep 15

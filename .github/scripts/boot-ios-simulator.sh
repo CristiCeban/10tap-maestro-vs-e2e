@@ -40,42 +40,32 @@ if runtime not in devices:
     sys.exit(3)
 
 pool = devices[runtime]
-# Prefer the pinned name, then any available iPhone of that runtime: the name is
-# what the coordinates were tuned for, the runtime is what must not drift.
-for pick in (lambda d: d["name"] == want, lambda d: d["name"].startswith("iPhone")):
-    hit = next((d for d in pool if pick(d) and d.get("isAvailable", True)), None)
-    if hit:
-        print(hit["udid"])
-        sys.exit(0)
-
-sys.stderr.write("no iPhone device available on runtime %s; devices:\n  %s\n"
-                 % (runtime, "\n  ".join(d["name"] for d in pool)))
-sys.exit(4)
+# Strict on the device name as well as the runtime. The failure this whole file
+# is about is coordinate-sensitive (a tap landing on Heading 4 in the toolbar),
+# and a different iPhone model is a different viewport, so quietly substituting
+# "some iPhone on the right OS" would move a variable while looking like it held
+# one. Anything else is handled by creating the pinned device below.
+hit = next((d for d in pool if d["name"] == want and d.get("isAvailable", True)), None)
+if hit:
+    print(hit["udid"])
+    sys.exit(0)
+print("")
 ')
 
+# Empty means "runtime is installed, that device does not exist yet": create it on
+# the pinned runtime. Creation failure is fatal — see the comment above.
 if [ -z "$udid" ]; then
-  echo "boot-ios-simulator: could not resolve a device for $runtime" >&2
-  exit 5
-fi
-
-# The pinned name is not on the runner image: create it on the SAME runtime
-# rather than quietly accepting a different iPhone.
-if ! xcrun simctl list devices --json | UDID="$udid" python3 -c '
-import json, os, sys
-sys.exit(0 if any(d["udid"] == os.environ["UDID"]
-                   for pool in json.load(sys.stdin)["devices"].values()
-                   for d in pool) else 1)
-'; then
   devtype=$(xcrun simctl list devicetypes -j | WANT="$want" python3 -c '
 import json, os, sys
 want = os.environ["WANT"]
 hit = next((t for t in json.load(sys.stdin)["devicetypes"] if t["name"] == want), None)
 if not hit:
-    sys.stderr.write("devicetype %r not known to simctl\n" % want)
+    sys.stderr.write("no device %r on runtime %s and no such devicetype to create it\n"
+                     % (want, os.environ["RUNTIME"]))
     sys.exit(6)
-print(hit["identifier"])')
+print(hit["identifier"])') || exit 6
   echo "creating '$want' on $runtime"
-  udid=$(xcrun simctl create "$want" "$devtype" "$runtime")
+  udid=$(xcrun simctl create "$want" "$devtype" "$runtime") || exit 6
 fi
 
 # One booted device is a harness assumption: run-arm.sh reads the UDID back out

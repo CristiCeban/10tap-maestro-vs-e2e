@@ -1,5 +1,17 @@
 name: Setup
-description: Set up Node.js and install the workspace dependencies
+description: >
+  Set up Node.js and install the workspace dependencies. `agent-device-version`
+  optionally swaps the hoisted agent-device copy after install; see
+  .github/bench/ad-swap.sh for why that is a directory swap and not a yarn
+  `resolutions` change (the lockfile must stay byte-identical so the engine is the
+  ONLY changed variable versus the published 0.21.28 rows).
+
+inputs:
+  agent-device-version:
+    description: >
+      agent-device version to pin for the e2e arm. Empty = the locked 0.21.28, i.e.
+      exactly what every published row ran.
+    default: ''
 
 runs:
   using: composite
@@ -9,6 +21,16 @@ runs:
       with:
         node-version-file: .nvmrc
 
+    # The node_modules cache is keyed on the requested engine version, and the
+    # restore-keys stay inside that version's own namespace.
+    #
+    # This is load-bearing, not cosmetic. The swap deliberately does NOT change
+    # yarn.lock, so a lockfile-only key would store a 0.21.31 node_modules tree under
+    # the same key a baseline run restores from, and the prefix restore-keys would then
+    # leak it both ways: a baseline run could silently boot the swapped engine while
+    # still reporting agent-device=0.21.28 in tool_versions. `locked` and `pin-<ver>`
+    # differ at the first character of that segment, so neither key can ever
+    # prefix-match the other's restore-keys.
     - name: Cache dependencies
       id: yarn-cache
       uses: actions/cache@v4
@@ -16,12 +38,21 @@ runs:
         path: |
           **/node_modules
           .yarn/install-state.gz
-        key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}-${{ hashFiles('**/package.json', '!**/node_modules/**') }}
+        key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}-${{ inputs.agent-device-version == '' && 'locked' || format('pin-{0}', inputs.agent-device-version) }}-${{ hashFiles('**/package.json', '!**/node_modules/**') }}
         restore-keys: |
-          ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
-          ${{ runner.os }}-yarn-
+          ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}-${{ inputs.agent-device-version == '' && 'locked' || format('pin-{0}', inputs.agent-device-version) }}-
+          ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}-${{ inputs.agent-device-version == '' && 'locked' || format('pin-{0}', inputs.agent-device-version) }}
 
     - name: Install dependencies
       if: steps.yarn-cache.outputs.cache-hit != 'true'
       run: yarn install --immutable
       shell: bash
+
+    # Runs on cache hits too, and is idempotent (it skips a copy already at the
+    # requested version). It also verifies @e2e-dev/mobile still loads against the
+    # swapped engine. run-arm.sh records the resulting version in tool_versions on
+    # every row, so a swapped run can never be mistaken for a locked one.
+    - name: Pin agent-device to the requested version
+      if: inputs.agent-device-version != ''
+      shell: bash
+      run: bash .github/bench/ad-swap.sh "$GITHUB_WORKSPACE" "${{ inputs.agent-device-version }}"

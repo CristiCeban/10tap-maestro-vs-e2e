@@ -61,7 +61,12 @@ for devs in json.load(sys.stdin)["devices"].values():
   # Deterministic keyboard for BOTH arms, the iOS counterpart of the emulator's
   # disable-spellchecker/disable-animations flags below. Runs before the warm
   # launch so the app picks the preferences up on its first launch of the run.
-  STEP_LOG="$OUT/steps.txt" .github/scripts/ios-keyboard-prefs.sh "$udid" \
+  # `bash <script>`, not direct execution: this file was committed 100644 and the
+  # direct call died with `Permission denied` in run 39826835180, so that whole
+  # wave measured an UNPATCHED keyboard while looking patched. Interpreter-first
+  # makes the fix immune to the file mode, which is the only reason to trust a
+  # harness fix that has to work on a fresh checkout every time.
+  STEP_LOG="$OUT/steps.txt" bash .github/scripts/ios-keyboard-prefs.sh "$udid" \
     >> "$OUT/steps.txt" 2>&1 || echo "ios_keyboard_prefs=FAILED" >> "$OUT/steps.txt"
   t=$(now)
   xcrun simctl launch "$udid" "$APP"

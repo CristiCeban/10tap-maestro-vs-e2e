@@ -109,6 +109,14 @@ case "$ARM" in
 esac
 suite_s=$(since "$t")
 
+# Crash evidence for both arms: Android's crash buffer and the app's process
+# deaths, so a failure where the app left the screen can be classified.
+if [ "$PLATFORM" = android ]; then
+  adb logcat -d -b crash > "$OUT/logcat-crash.txt" 2>&1 || true
+  adb logcat -d -b main,system,events -v time 2>/dev/null |
+    grep -E "am_proc_died|am_crash|am_anr|FATAL EXCEPTION|$APP" | tail -n 2000 > "$OUT/logcat-app.txt" || true
+fi
+
 {
   echo "platform=$PLATFORM"
   echo "arm=$ARM"

@@ -11,6 +11,7 @@ import {
   doubleTapToSelect,
   editorStatus,
   expectHtml,
+  expectKeyboardBackUp,
   insertLink,
   launch,
   openEntry,
@@ -32,7 +33,19 @@ test(
     await expect(editorStatus(screen)).toHaveText(/^ready:true editable:true/, {
       timeout: 15_000,
     });
-    await screen.getByTestId(EDITOR).tap();
+    // The source taps `id: smoke-editor`, the RN *container*. On iOS 26 in CI the
+    // WebView had promoted that container's accessibility label to
+    // "Vertical scroll bar, 1 page", so the locator resolved to the WebView's
+    // scroll bar: the trace's next line is `screen: unchanged since step 7`, and
+    // the 15 s `Italic` wait below then runs 23 s and dies with the probe still
+    // reading `keyboard:down`. That button cannot exist in that state — the
+    // Toolbar hides itself while `!isKeyboardUp` (src/RichText/Toolbar/
+    // Toolbar.tsx:110) — so the flow was waiting for a node the app is not
+    // allowed to show. Tap the contenteditable the typing steps already use and
+    // require the state the tap exists to produce, loudly, here rather than 23 s
+    // later on an unrelated button.
+    await screen.getByTestId(EDITOR).getByRole('textbox').tap();
+    await expectKeyboardBackUp(screen, 300, 10_000);
     await expect(screen.getByRole('button', 'Italic')).toBeVisible({
       timeout: 15_000,
     });

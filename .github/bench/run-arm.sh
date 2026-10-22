@@ -23,6 +23,26 @@ if [ "$PLATFORM" = android ]; then
   adb install -r app/app-release.apk
   echo "install_s=$(since "$t")" >> "$OUT/steps.txt"
 
+  # ANR guard, the same for both arms: on these runners the emulator's
+  # launcher ("Pixel Launcher isn't responding") ANRs, and its system dialog
+  # covers the app for the rest of the run. The tests never use the launcher,
+  # so disable it, and close any ANR dialog of another app that still shows.
+  if [ "${ANR_GUARD:-on}" = on ]; then
+    adb shell pm disable-user --user 0 com.google.android.apps.nexuslauncher || true
+    (
+      while sleep 3; do
+        anr=$(adb shell dumpsys window windows 2>/dev/null | tr -d '\r' |
+          grep -o 'Application Not Responding: [A-Za-z0-9._]*' | head -n 1 | sed 's/.*: //')
+        if [ -n "$anr" ] && [ "$anr" != "$APP" ]; then
+          echo "$(date -u +%T) $anr" >> "$OUT/anr.log"
+          adb shell am force-stop "$anr" || true
+        fi
+      done
+    ) &
+    ANR_PID=$!
+    trap 'kill "$ANR_PID" 2>/dev/null' EXIT
+  fi
+
   sleep 120
   t=$(now)
   adb shell am start -W -n "$APP/.MainActivity"
@@ -101,6 +121,8 @@ suite_s=$(since "$t")
   echo "runner=${ImageOS:-}/${ImageVersion:-}"
   echo "app_sha256=$(cut -d' ' -f1 app/*.sha256)"
   echo "commit=${GITHUB_SHA:-}"
+  echo "anr_guard=${ANR_GUARD:-on}"
+  echo "anr_events=$(wc -l < "$OUT/anr.log" 2>/dev/null | tr -d ' ' || echo 0)"
 } > "$OUT/result.env"
 cat "$OUT/steps.txt" "$OUT/result.env"
 tail -n 60 "$OUT/stdout.log"

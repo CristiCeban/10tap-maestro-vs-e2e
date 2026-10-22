@@ -21,6 +21,9 @@ on:
       maestro_version:
         description: Maestro CLI version
         default: '2.11.0'
+      anr_guard:
+        description: Android ANR guard (disable the launcher, close other apps' ANR dialogs)
+        default: 'on'
 
 permissions:
   contents: read
@@ -59,6 +62,7 @@ jobs:
       PLATFORM: ${{ matrix.platform }}
       ARM: ${{ matrix.arm }}
       RUN: ${{ matrix.run }}
+      ANR_GUARD: ${{ inputs.anr_guard }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5

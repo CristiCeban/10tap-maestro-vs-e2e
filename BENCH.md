@@ -18,6 +18,11 @@ This is a fork of [10play/10tap-editor](https://github.com/10play/10tap-editor) 
      google_apis, pixel_5, 4 cores, 4 GB). Device prep is the same as 10tap
      CI: detach the hardware keyboard, wait out the Play services restart,
      then a warm launch.
+     On top of that, an **ANR guard** (input `anr_guard`, on by default, the
+     same for both arms) disables the Pixel Launcher and closes any other
+     app's "isn't responding" dialog. Without it, a launcher ANR dialog
+     covered the app for whole runs: 2 of 5 Maestro runs and 4 of 5 e2e runs
+     in the first batches. `anr_events` counts the dialogs it closed.
    - iOS runs on `macos-15` with the latest stable Xcode, on the first iPhone
      of the newest runtime (10tap's `boot-ios-simulator.sh`), after a warm
      launch.

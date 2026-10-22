@@ -84,6 +84,7 @@ for r in runs:
         'tests_failed': sum(1 for _, st in t.values() if st == 'failed'),
         'exit': r['exit'], 'install_s': r.get('install_s'),
         'versions': r.get('versions'), 'device': r.get('device'), 'runner': r.get('runner'),
+        'anr_guard': r.get('anr_guard'), 'anr_events': r.get('anr_events'),
         'app_sha256': r.get('app_sha256'), 'boot_install_s': r.get('boot_install_s'), 'commit': r.get('commit'),
         'failed_tests': '; '.join(sorted(n for n, (_, st) in t.items() if st == 'failed')),
     })

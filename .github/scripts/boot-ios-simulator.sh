@@ -55,7 +55,7 @@ print("")
 # Empty means "runtime is installed, that device does not exist yet": create it on
 # the pinned runtime. Creation failure is fatal — see the comment above.
 if [ -z "$udid" ]; then
-  devtype=$(xcrun simctl list devicetypes -j | WANT="$want" python3 -c '
+  devtype=$(xcrun simctl list devicetypes -j | WANT="$want" RUNTIME="$runtime" python3 -c '
 import json, os, sys
 want = os.environ["WANT"]
 hit = next((t for t in json.load(sys.stdin)["devicetypes"] if t["name"] == want), None)
